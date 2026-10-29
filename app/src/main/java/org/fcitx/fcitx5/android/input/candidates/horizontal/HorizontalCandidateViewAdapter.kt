@@ -60,7 +60,10 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
         ui.root.apply {
             minimumWidth = dp(40)
             setPaddingDp(10, 0, 10, 0)
-            layoutParams = FlexboxLayoutManager.LayoutParams(wrapContent, matchParent)
+            layoutParams = FlexboxLayoutManager.LayoutParams(wrapContent, matchParent).apply {
+                // Candidate items size to their content; overflow is scrolled.
+                flexShrink = 0f
+            }
         }
         return CandidateViewHolder(ui)
     }

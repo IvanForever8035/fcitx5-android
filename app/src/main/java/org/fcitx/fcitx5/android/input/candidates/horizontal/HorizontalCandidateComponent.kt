@@ -113,6 +113,9 @@ class HorizontalCandidateComponent :
                 holder.itemView.updateLayoutParams<FlexboxLayoutManager.LayoutParams> {
                     minWidth = layoutMinWidth
                     flexGrow = layoutFlexGrow
+                    // Never squeeze a candidate below its natural width. The bar
+                    // scrolls instead, so long candidates keep the same font size.
+                    flexShrink = 0f
                 }
                 holder.itemView.setOnClickListener {
                     fcitx.launchOnReady { it.select(holder.idx) }
