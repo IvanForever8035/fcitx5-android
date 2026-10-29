@@ -26,6 +26,11 @@ on:
           - x86_64
           - x86
           - all
+      build_plugins:
+        description: Also build plugin APKs (not needed when using official plugins)
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - "**"
@@ -52,9 +57,10 @@ jobs:
     timeout-minutes: 180
     env:
       # github.event.inputs is present for workflow_dispatch and empty on push,
-      # so pushes default to debug / arm64-v8a.
+      # so pushes default to debug / arm64-v8a and skip the plugin builds.
       VARIANT: ${{ github.event.inputs.variant || 'debug' }}
       ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
+      BUILD_PLUGINS: ${{ github.event.inputs.build_plugins || 'false' }}
     steps:
       - name: Fetch source code
         uses: actions/checkout@v7
@@ -96,11 +102,14 @@ jobs:
           if [ "$ABI" != "all" ]; then
             abi_args+=("-PbuildABI=$ABI")
           fi
-          echo "Building variant=$variant abi=$ABI"
+          echo "Building variant=$variant abi=$ABI (plugins=$BUILD_PLUGINS)"
           ./gradlew ":app:assemble${variant}" "${abi_args[@]}" --stacktrace
-          ./gradlew ":assemble${variant}Plugins" "${abi_args[@]}" --stacktrace
+          if [ "$BUILD_PLUGINS" = "true" ]; then
+            ./gradlew ":assemble${variant}Plugins" "${abi_args[@]}" --stacktrace
+          fi
 
       - name: Pack plugins
+        if: ${{ github.event.inputs.build_plugins == 'true' }}
         shell: bash
         run: |
           mkdir -p plugins-to-upload
@@ -115,6 +124,7 @@ jobs:
           echo "### Build result" >> "$GITHUB_STEP_SUMMARY"
           echo "- variant: \`$VARIANT\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- abi: \`$ABI\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- plugins: \`$BUILD_PLUGINS\`" >> "$GITHUB_STEP_SUMMARY"
           find app/build/outputs/apk -type f -name "*.apk" -printf "- \`%p\` (%s bytes)\n" >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload app
@@ -124,6 +134,7 @@ jobs:
           path: app/build/outputs/apk/${{ env.VARIANT }}/
 
       - name: Upload plugins
+        if: ${{ github.event.inputs.build_plugins == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: plugins-${{ env.VARIANT }}-${{ env.ABI }}
