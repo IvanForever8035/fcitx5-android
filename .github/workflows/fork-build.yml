@@ -6,15 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: Build variant ("debug" is auto-signed and installable; "release" needs signing secrets)
+        description: Build variant ("release" uses your signing secrets; "debug" is auto-signed and needs no secrets)
         type: choice
         required: true
-        # Debug APKs are signed with the debug key, so they install without extra setup.
-        # The package id gets a ".debug" suffix and can coexist with the official app.
-        default: debug
+        # Release is the daily-use variant: official package id/name and
+        # compatible with official plugins. Debug gets a ".debug" suffix and
+        # only discovers debug plugins.
+        default: release
         options:
-          - debug
           - release
+          - debug
       abi:
         description: ABI to build (pick "all" for a universal APK)
         type: choice
@@ -106,6 +107,26 @@ jobs:
           ./gradlew ":app:assemble${variant}" "${abi_args[@]}" --stacktrace
           if [ "$BUILD_PLUGINS" = "true" ]; then
             ./gradlew ":assemble${variant}Plugins" "${abi_args[@]}" --stacktrace
+          fi
+
+      - name: Verify release signature
+        if: ${{ env.VARIANT == 'release' }}
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/release -type f -name "*.apk" | head -n 1)
+          if [ -z "$apk" ]; then
+            echo "::error::No release APK was produced."
+            exit 1
+          fi
+          if echo "$apk" | grep -q "unsigned"; then
+            echo "::error::Release APK is unsigned. Add SIGN_KEY_BASE64, SIGN_KEY_PWD and SIGN_KEY_ALIAS under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          apksigner=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --print-certs "$apk"
+          else
+            echo "::warning::apksigner not found; skipped certificate check."
           fi
 
       - name: Pack plugins
