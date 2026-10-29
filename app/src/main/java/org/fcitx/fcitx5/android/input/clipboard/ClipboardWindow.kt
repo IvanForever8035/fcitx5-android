@@ -135,6 +135,8 @@ class ClipboardWindow : InputWindow.ExtendedInputWindow<ClipboardWindow>() {
             recyclerView.apply {
                 layoutManager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL)
                 adapter = this@ClipboardWindow.adapter
+                // avoid Android 12+ stretch overscroll misaligning touch targets
+                overScrollMode = View.OVER_SCROLL_NEVER
             }
             ItemTouchHelper(object : ItemTouchHelper.Callback() {
                 override fun getMovementFlags(

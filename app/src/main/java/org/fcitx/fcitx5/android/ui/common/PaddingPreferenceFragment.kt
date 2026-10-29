@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.ui.common
 
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.CallSuper
 import org.fcitx.fcitx5.android.ui.main.modified.MyPreferenceFragment
@@ -20,5 +21,8 @@ abstract class PaddingPreferenceFragment : MyPreferenceFragment() {
         savedInstanceState: Bundle?
     ) = super.onCreateView(inflater, container, savedInstanceState).apply {
         listView.applyNavBarInsetsBottomPadding()
+        // Android 12+ stretch overscroll moves the drawn content but not the
+        // touch targets, so taps right after over-scrolling can miss.
+        listView.overScrollMode = View.OVER_SCROLL_NEVER
     }
 }

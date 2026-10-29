@@ -5,12 +5,19 @@
 package org.fcitx.fcitx5.android.ui.main.settings.theme
 
 import android.content.Context
+import android.view.View
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import splitties.dimensions.dp
 import kotlin.math.max
 
 class ResponsiveThemeListView(context: Context) : RecyclerView(context) {
+
+    init {
+        // Android 12+ stretch overscroll offsets the drawn content without
+        // offsetting touch targets, which makes taps miss after over-scrolling.
+        overScrollMode = View.OVER_SCROLL_NEVER
+    }
 
     var itemWidth = dp(128)
     var itemHeight = dp(92)

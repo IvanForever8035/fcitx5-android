@@ -90,6 +90,9 @@ class ExpandedCandidateLayout(context: Context, theme: Theme) : ConstraintLayout
         // disable item cross-fade animation
         itemAnimator = null
         isVerticalScrollBarEnabled = false
+        // Android 12+ stretch overscroll offsets the drawn content without
+        // offsetting touch targets, which makes taps miss after over-scrolling.
+        overScrollMode = OVER_SCROLL_NEVER
     }
 
     val tabsContainer = constraintLayout()
@@ -100,6 +103,8 @@ class ExpandedCandidateLayout(context: Context, theme: Theme) : ConstraintLayout
         isScrollbarFadingEnabled = false
         scrollBarSize = dp(1)
         setVerticalScrollbarThumbColor(theme.candidateTextColor)
+        // keep touch targets aligned with the drawn content, see recyclerView above
+        overScrollMode = OVER_SCROLL_NEVER
     }
 
     val pinnedTabs = recyclerView {

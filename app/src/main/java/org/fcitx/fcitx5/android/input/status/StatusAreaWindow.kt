@@ -169,6 +169,8 @@ class StatusAreaWindow : InputWindow.ExtendedInputWindow<StatusAreaWindow>(),
             }
             layoutManager = gridLayoutManager(4)
             adapter = this@StatusAreaWindow.adapter
+            // avoid Android 12+ stretch overscroll misaligning touch targets
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
     }
 
