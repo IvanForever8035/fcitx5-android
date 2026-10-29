@@ -1,0 +1,131 @@
+name: Fork Build
+
+# Fork-specific build pipeline.
+# Kept separate from pull_request.yml so that syncing upstream stays conflict-free.
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Build variant ("debug" is auto-signed and installable; "release" needs signing secrets)
+        type: choice
+        required: true
+        # Debug APKs are signed with the debug key, so they install without extra setup.
+        # The package id gets a ".debug" suffix and can coexist with the official app.
+        default: debug
+        options:
+          - debug
+          - release
+      abi:
+        description: ABI to build (pick "all" for a universal APK)
+        type: choice
+        required: true
+        default: arm64-v8a
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - x86
+          - all
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+    paths-ignore:
+      - "**.md"
+      - ".github/workflows/pull_request.yml"
+      - ".github/workflows/fdroid.yml"
+      - ".github/workflows/nix.yml"
+      - ".github/workflows/publish.yml"
+
+# A newer push to the same ref cancels the previous build.
+concurrency:
+  group: fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      # github.event.inputs is present for workflow_dispatch and empty on push,
+      # so pushes default to debug / arm64-v8a.
+      VARIANT: ${{ github.event.inputs.variant || 'debug' }}
+      ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
+    steps:
+      - name: Fetch source code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android environment
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android CMake
+        run: sdkmanager --install "cmake;3.31.6"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y extra-cmake-modules gettext
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build APK
+        env:
+          # Set these repository secrets to get a signed release APK.
+          # Without them the release APK is unsigned (app-*-release-unsigned.apk).
+          SIGN_KEY_BASE64: ${{ secrets.SIGN_KEY_BASE64 }}
+          SIGN_KEY_PWD: ${{ secrets.SIGN_KEY_PWD }}
+          SIGN_KEY_ALIAS: ${{ secrets.SIGN_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          variant="${VARIANT^}"
+          abi_args=()
+          if [ "$ABI" != "all" ]; then
+            abi_args+=("-PbuildABI=$ABI")
+          fi
+          echo "Building variant=$variant abi=$ABI"
+          ./gradlew ":app:assemble${variant}" "${abi_args[@]}" --stacktrace
+          ./gradlew ":assemble${variant}Plugins" "${abi_args[@]}" --stacktrace
+
+      - name: Pack plugins
+        shell: bash
+        run: |
+          mkdir -p plugins-to-upload
+          for i in $(ls plugin); do
+            if [ -d "plugin/${i}/build/outputs/apk/${VARIANT}" ]; then
+              mv "plugin/${i}/build/outputs/apk/${VARIANT}" "plugins-to-upload/${i}"
+            fi
+          done
+
+      - name: Show artifacts
+        run: |
+          echo "### Build result" >> "$GITHUB_STEP_SUMMARY"
+          echo "- variant: \`$VARIANT\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- abi: \`$ABI\`" >> "$GITHUB_STEP_SUMMARY"
+          find app/build/outputs/apk -type f -name "*.apk" -printf "- \`%p\` (%s bytes)\n" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload app
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-${{ env.VARIANT }}-${{ env.ABI }}
+          path: app/build/outputs/apk/${{ env.VARIANT }}/
+
+      - name: Upload plugins
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugins-${{ env.VARIANT }}-${{ env.ABI }}
+          path: plugins-to-upload
+          if-no-files-found: ignore
