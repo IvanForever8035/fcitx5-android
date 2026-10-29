@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
+import org.fcitx.fcitx5.android.core.CandidateWord
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.daemon.launchOnReady
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
@@ -82,6 +83,9 @@ class HorizontalCandidateComponent :
     private var loadMoreJob: Job? = null
     private var candidateGeneration = 0
     private var loadExhausted = false
+    // Loaded page waiting for the scroll to settle. Inserting items in the
+    // middle of a gesture forces a full Flexbox relayout and drops frames.
+    private var pendingCandidates: Array<CandidateWord>? = null
 
     // Tells the expanded candidate window to reload from the first candidate.
     // Replay the last value so a newly opened window gets it as well.
@@ -189,6 +193,10 @@ class HorizontalCandidateComponent :
             adapter = this@HorizontalCandidateComponent.adapter
             layoutManager = this@HorizontalCandidateComponent.layoutManager
             addItemDecoration(FlexboxVerticalDecoration(dividerDrawable))
+            // The bar's size is fixed by its constraints, not by its contents.
+            setHasFixedSize(true)
+            // Keep more item views around to avoid re-inflating while swiping.
+            setItemViewCacheSize(16)
             // Android 12+ stretch overscroll offsets the drawn content without
             // offsetting touch targets; horizontal scrolling is enabled here, so
             // disable it to keep candidate taps accurate.
@@ -197,12 +205,20 @@ class HorizontalCandidateComponent :
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                     if (dx > 0) maybeLoadMore()
                 }
+
+                override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                    if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                        recyclerView.post { appendPendingCandidates() }
+                    }
+                }
             })
         }
     }
 
     private fun maybeLoadMore() {
-        if (loadMoreJob?.isActive == true || loadExhausted) return
+        // A fetched page that is waiting for the scroll to settle already
+        // covers the next offset; don't fetch it twice.
+        if (pendingCandidates != null || loadMoreJob?.isActive == true || loadExhausted) return
         val loaded = adapter.candidates.size
         if (loaded == 0) return
         val total = adapter.total
@@ -227,14 +243,32 @@ class HorizontalCandidateComponent :
                 loadExhausted = true
                 return@launch
             }
-            adapter.appendCandidates(more)
             if (more.size < LOAD_MORE_BATCH_SIZE) {
                 loadExhausted = true
-            } else if (!view.canScrollHorizontally(1)) {
-                // Wide screen: the appended page still doesn't overflow the bar.
-                loadMoreJob = null
-                view.post { maybeLoadMore() }
             }
+            if (view.scrollState == RecyclerView.SCROLL_STATE_IDLE) {
+                adapter.appendCandidates(more)
+                if (!loadExhausted && !view.canScrollHorizontally(1)) {
+                    // Wide screen: the appended page still doesn't overflow the bar.
+                    loadMoreJob = null
+                    view.post { maybeLoadMore() }
+                }
+            } else {
+                // Do not insert while the user is dragging/flinging: the full
+                // Flexbox relayout would drop frames in the middle of a gesture.
+                pendingCandidates = more
+            }
+        }
+    }
+
+    private fun appendPendingCandidates() {
+        val pending = pendingCandidates ?: return
+        pendingCandidates = null
+        adapter.appendCandidates(pending)
+        if (!loadExhausted && !view.canScrollHorizontally(1)) {
+            // Still not scrollable, e.g. on a very wide screen.
+            loadMoreJob = null
+            view.post { maybeLoadMore() }
         }
     }
 
@@ -243,6 +277,7 @@ class HorizontalCandidateComponent :
         loadMoreJob?.cancel()
         loadMoreJob = null
         loadExhausted = false
+        pendingCandidates = null
         val candidates = data.candidates
         val total = data.total
         val maxSpanCount = maxSpanCountPref.getValue()
