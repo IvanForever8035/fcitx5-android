@@ -130,7 +130,7 @@ abstract class BaseExpandedCandidateWindow<T : BaseExpandedCandidateWindow<T>> :
         pinnedTabsAdapter.updateTabs(pinnedTabs)
     }
 
-    private var offsetJob: Job? = null
+    private var refreshJob: Job? = null
 
     private val candidatesPager by lazy {
         Pager(
@@ -160,14 +160,12 @@ abstract class BaseExpandedCandidateWindow<T : BaseExpandedCandidateWindow<T>> :
             it.keyActionListener = keyActionListener
         }
         updateTabs(fcitx.runImmediately { inputPanelCached.tabs })
-        offsetJob = service.lifecycleScope.launch {
-            horizontalCandidate.expandedCandidateOffset.collect {
-                if (it <= 0) {
-                    windowManager.attachWindow(KeyboardWindow)
-                } else {
-                    candidateLayout.resetPosition()
-                    adapter.refreshWithOffset(it)
-                }
+        refreshJob = service.lifecycleScope.launch {
+            horizontalCandidate.expandedCandidatesRefresh.collect {
+                // Always show the full candidate list from the first candidate.
+                // The horizontal bar's scroll position must not change it.
+                candidateLayout.resetPosition()
+                adapter.refreshWithOffset(0)
             }
         }
         candidatesSubmitJob = service.lifecycleScope.launch {
@@ -195,10 +193,10 @@ abstract class BaseExpandedCandidateWindow<T : BaseExpandedCandidateWindow<T>> :
     override fun onDetached() {
         bar.expandButtonStateMachine.push(
             ExpandedCandidatesDetached,
-            ExpandedCandidatesEmpty to (horizontalCandidate.adapter.total == adapter.offset)
+            ExpandedCandidatesEmpty to horizontalCandidate.adapter.candidates.isEmpty()
         )
         candidatesSubmitJob?.cancel()
-        offsetJob?.cancel()
+        refreshJob?.cancel()
         candidateLayout.embeddedKeyboard.keyActionListener = null
     }
 

@@ -83,20 +83,22 @@ class HorizontalCandidateComponent :
     private var candidateGeneration = 0
     private var loadExhausted = false
 
-    // Since expanded candidate window is created once the expand button was clicked,
-    // we need to replay the last offset
-    private val _expandedCandidateOffset = MutableSharedFlow<Int>(
+    // Tells the expanded candidate window to reload from the first candidate.
+    // Replay the last value so a newly opened window gets it as well.
+    private val _expandedCandidatesRefresh = MutableSharedFlow<Unit>(
         replay = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
-    val expandedCandidateOffset = _expandedCandidateOffset.asSharedFlow()
+    val expandedCandidatesRefresh = _expandedCandidatesRefresh.asSharedFlow()
 
-    private fun refreshExpanded(childCount: Int) {
-        _expandedCandidateOffset.tryEmit(childCount)
+    private fun refreshExpanded() {
+        // The bar can scroll now, so the expand button must not disappear when
+        // more candidates become laid out. It is only hidden if there is
+        // nothing to expand at all.
         bar.expandButtonStateMachine.push(
             ExpandedCandidatesUpdated,
-            ExpandedCandidatesEmpty to (adapter.total == childCount)
+            ExpandedCandidatesEmpty to adapter.candidates.isEmpty()
         )
     }
 
@@ -156,7 +158,7 @@ class HorizontalCandidateComponent :
                         secondLayoutPassNeeded = false
                     }
                 }
-                refreshExpanded(cnt)
+                refreshExpanded()
             }
             // no need to override `generate{,Default}LayoutParams`, because HorizontalCandidateViewAdapter
             // guarantees ViewHolder's layoutParams to be `FlexboxLayoutManager.LayoutParams`
@@ -264,10 +266,13 @@ class HorizontalCandidateComponent :
             }
         }
         adapter.updateCandidates(candidates, total)
+        // The expanded list always starts from the first candidate and must not
+        // be affected by how far the horizontal bar has been scrolled.
+        _expandedCandidatesRefresh.tryEmit(Unit)
         view.scrollToPosition(0)
         // not sure why empty candidates won't trigger `FlexboxLayoutManager#onLayoutCompleted()`
         if (candidates.isEmpty()) {
-            refreshExpanded(0)
+            refreshExpanded()
         } else {
             // On wide screens the first batch may not overflow the bar at all.
             view.post { maybeLoadMore() }
