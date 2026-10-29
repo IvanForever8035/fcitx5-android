@@ -100,6 +100,24 @@ val Project.signKeyPwd: String?
 val Project.signKeyAlias: String?
     get() = epn("SIGN_KEY_ALIAS", "signKeyAlias")
 
+/**
+ * Signing accepts both JKS and PKCS#12 stores. AGP's default store type varies,
+ * and keys passed through SIGN_KEY_BASE64 are written to a temp `.ks` file, so
+ * infer the type from the file magic instead of the file extension.
+ */
+private fun File.detectKeyStoreType(): String? {
+    val magic = runCatching { inputStream().use { it.readNBytes(4) } }.getOrNull() ?: return null
+    if (magic.size < 4) return null
+    return when {
+        magic.contentEquals(byteArrayOf(0xFE.toByte(), 0xED.toByte(), 0xFE.toByte(), 0xED.toByte())) ->
+            "JKS"
+        magic.contentEquals(byteArrayOf(0xCE.toByte(), 0xCE.toByte(), 0xCE.toByte(), 0xCE.toByte())) ->
+            "JCEKS"
+        magic[0] == 0x30.toByte() -> "PKCS12"
+        else -> null
+    }
+}
+
 fun NamedDomainObjectContainer<out ApkSigningConfig>.fromProjectEnv(project: Project): ApkSigningConfig? {
     val keyFile = project.signKey ?: return null
     val name = "release"
@@ -108,5 +126,6 @@ fun NamedDomainObjectContainer<out ApkSigningConfig>.fromProjectEnv(project: Pro
         storePassword = project.signKeyPwd
         keyAlias = project.signKeyAlias
         keyPassword = project.signKeyPwd
+        keyFile.detectKeyStoreType()?.let { storeType = it }
     }
 }
