@@ -8,12 +8,19 @@ package org.fcitx.fcitx5.android.input.candidates.horizontal
 import android.content.res.Configuration
 import android.graphics.drawable.ShapeDrawable
 import android.graphics.drawable.shapes.RectShape
+import android.view.View
 import androidx.core.view.updateLayoutParams
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.flexbox.FlexDirection
+import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.daemon.launchOnReady
@@ -30,16 +37,19 @@ import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateM
 import org.fcitx.fcitx5.android.input.dependency.UniqueViewComponent
 import org.fcitx.fcitx5.android.input.dependency.context
 import org.fcitx.fcitx5.android.input.dependency.fcitx
+import org.fcitx.fcitx5.android.input.dependency.inputMethodService
 import org.fcitx.fcitx5.android.input.dependency.inputView
 import org.fcitx.fcitx5.android.input.dependency.theme
 import org.mechdancer.dependency.manager.must
 import splitties.dimensions.dp
+import timber.log.Timber
 import kotlin.math.max
 
 class HorizontalCandidateComponent :
     UniqueViewComponent<HorizontalCandidateComponent, RecyclerView>(), InputBroadcastReceiver {
 
     private val context by manager.context()
+    private val service by manager.inputMethodService()
     private val fcitx by manager.fcitx()
     private val theme by manager.theme()
     private val inputView by manager.inputView()
@@ -66,6 +76,12 @@ class HorizontalCandidateComponent :
      */
     private var secondLayoutPassNeeded = false
     private var secondLayoutPassDone = false
+
+    // The native bulk candidate list only delivers the first 16 candidates.
+    // Load the rest on demand as the user scrolls the bar.
+    private var loadMoreJob: Job? = null
+    private var candidateGeneration = 0
+    private var loadExhausted = false
 
     // Since expanded candidate window is created once the expand button was clicked,
     // we need to replay the last offset
@@ -111,8 +127,16 @@ class HorizontalCandidateComponent :
 
     val layoutManager: FlexboxLayoutManager by lazy {
         object : FlexboxLayoutManager(context) {
+            init {
+                // Lay everything out in one horizontal row. The bar's height is
+                // fixed, so the default WRAP would put the overflow on invisible
+                // lines that can never be reached.
+                flexDirection = FlexDirection.ROW
+                flexWrap = FlexWrap.NOWRAP
+            }
+
             override fun canScrollVertically() = false
-            override fun canScrollHorizontally() = false
+            override fun canScrollHorizontally() = true
             override fun onLayoutCompleted(state: RecyclerView.State) {
                 super.onLayoutCompleted(state)
                 val cnt = this.childCount
@@ -163,10 +187,60 @@ class HorizontalCandidateComponent :
             adapter = this@HorizontalCandidateComponent.adapter
             layoutManager = this@HorizontalCandidateComponent.layoutManager
             addItemDecoration(FlexboxVerticalDecoration(dividerDrawable))
+            // Android 12+ stretch overscroll offsets the drawn content without
+            // offsetting touch targets; horizontal scrolling is enabled here, so
+            // disable it to keep candidate taps accurate.
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    if (dx > 0) maybeLoadMore()
+                }
+            })
+        }
+    }
+
+    private fun maybeLoadMore() {
+        if (loadMoreJob?.isActive == true || loadExhausted) return
+        val loaded = adapter.candidates.size
+        if (loaded == 0) return
+        val total = adapter.total
+        if (total >= 0 && loaded >= total) return
+        val lastVisible = layoutManager.findLastVisibleItemPosition()
+        if (lastVisible < 0 || lastVisible < loaded - LOAD_MORE_THRESHOLD) return
+
+        val generation = candidateGeneration
+        val offset = loaded
+        loadMoreJob = service.lifecycleScope.launch {
+            val more = try {
+                fcitx.runOnReady { getCandidates(offset, LOAD_MORE_BATCH_SIZE) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to load more candidates (offset=$offset)")
+                return@launch
+            }
+            // Candidate list changed while we were loading, drop the result.
+            if (generation != candidateGeneration) return@launch
+            if (more.isEmpty()) {
+                loadExhausted = true
+                return@launch
+            }
+            adapter.appendCandidates(more)
+            if (more.size < LOAD_MORE_BATCH_SIZE) {
+                loadExhausted = true
+            } else if (!view.canScrollHorizontally(1)) {
+                // Wide screen: the appended page still doesn't overflow the bar.
+                loadMoreJob = null
+                view.post { maybeLoadMore() }
+            }
         }
     }
 
     override fun onCandidateUpdate(data: FcitxEvent.CandidateListEvent.Data) {
+        candidateGeneration++
+        loadMoreJob?.cancel()
+        loadMoreJob = null
+        loadExhausted = false
         val candidates = data.candidates
         val total = data.total
         val maxSpanCount = maxSpanCountPref.getValue()
@@ -190,9 +264,18 @@ class HorizontalCandidateComponent :
             }
         }
         adapter.updateCandidates(candidates, total)
+        view.scrollToPosition(0)
         // not sure why empty candidates won't trigger `FlexboxLayoutManager#onLayoutCompleted()`
         if (candidates.isEmpty()) {
             refreshExpanded(0)
+        } else {
+            // On wide screens the first batch may not overflow the bar at all.
+            view.post { maybeLoadMore() }
         }
+    }
+
+    companion object {
+        private const val LOAD_MORE_THRESHOLD = 4
+        private const val LOAD_MORE_BATCH_SIZE = 32
     }
 }
