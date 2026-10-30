@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: LGPL-2.1-or-later
- * SPDX-FileCopyrightText: Copyright 2021-2025 Fcitx5 for Android Contributors
+ * SPDX-FileCopyrightText: Copyright 2021-2026 Fcitx5 for Android Contributors
  */
 
 package org.fcitx.fcitx5.android.input.candidates.horizontal
@@ -11,14 +11,17 @@ import android.graphics.drawable.shapes.RectShape
 import android.view.View
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.FcitxEvent
@@ -28,7 +31,6 @@ import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.BooleanKey.Ex
 import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.TransitionEvent.ExpandedCandidatesUpdated
 import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
 import org.fcitx.fcitx5.android.input.broadcast.InputBroadcastReceiver
-import org.fcitx.fcitx5.android.input.candidates.CandidateViewHolder
 import org.fcitx.fcitx5.android.input.candidates.expanded.decoration.FlexboxVerticalDecoration
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode.AlwaysFillWidth
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode.AutoFillWidth
@@ -39,10 +41,10 @@ import org.fcitx.fcitx5.android.input.dependency.fcitx
 import org.fcitx.fcitx5.android.input.dependency.inputMethodService
 import org.fcitx.fcitx5.android.input.dependency.inputView
 import org.fcitx.fcitx5.android.input.dependency.theme
+import org.mechdancer.dependency.DynamicScope
 import org.mechdancer.dependency.manager.must
 import splitties.dimensions.dp
 import kotlin.math.max
-import kotlin.math.min
 
 class HorizontalCandidateComponent :
     UniqueViewComponent<HorizontalCandidateComponent, RecyclerView>(), InputBroadcastReceiver {
@@ -67,26 +69,18 @@ class HorizontalCandidateComponent :
     private var layoutMinWidth = 0
     private var layoutFlexGrow = 1f
 
-    /**
-     * (for [HorizontalCandidateMode.AutoFillWidth] only)
-     * Second layout pass is needed when:
-     * [^1] total candidates count < maxSpanCount && [^2] RecyclerView cannot display all of them
-     * In that case, displayed candidates should be stretched evenly (by setting flexGrow to 1.0f).
-     */
-    private var secondLayoutPassNeeded = false
-    private var secondLayoutPassDone = false
+    /** Full candidate count from the latest engine event (-1 if unknown). */
+    @Volatile
+    var total = -1
+        private set
 
-    // Sliding window: only WINDOW_SIZE candidates are kept in the adapter at a
-    // time. Scrolling towards an edge shifts the window and loads the next
-    // slice instead of appending to an ever-growing list.
-    private var windowStart = 0
-    private var windowTotal = -1
-    private var windowLoading = false
-    private var windowGeneration = 0
+    /** Whether the latest engine event contained no candidates. */
+    @Volatile
+    var candidatesEmpty = true
+        private set
 
     // Some engines emit candidate events with identical contents (for example
-    // while selecting a candidate). Skip them so the bar is not scrolled back
-    // to the beginning for no reason.
+    // while selecting a candidate). Skip them so they don't reset the list.
     private var lastCandidateData: FcitxEvent.CandidateListEvent.Data? = null
 
     // Tells the expanded candidate window to reload from the first candidate.
@@ -98,42 +92,51 @@ class HorizontalCandidateComponent :
 
     val expandedCandidatesRefresh = _expandedCandidatesRefresh.asSharedFlow()
 
+    private var submitJob: Job? = null
+
+    private val candidatesPager by lazy {
+        Pager(
+            config = PagingConfig(
+                pageSize = WINDOW_SIZE,
+                initialLoadSize = WINDOW_SIZE,
+                // Keep only a small window of pages in memory; Paging loads the
+                // pages the user is about to see and drops the far ones.
+                maxSize = WINDOW_SIZE * 2,
+                enablePlaceholders = false,
+                prefetchDistance = WINDOW_SIZE / 2
+            ),
+            pagingSourceFactory = {
+                HorizontalCandidatesPagingSource(fcitx, total)
+            }
+        )
+    }
+
     private fun refreshExpanded() {
-        // The bar can scroll now, so the expand button must not disappear when
-        // more candidates become laid out. It is only hidden if there is
-        // nothing to expand at all.
         bar.expandButtonStateMachine.push(
             ExpandedCandidatesUpdated,
-            ExpandedCandidatesEmpty to adapter.candidates.isEmpty()
+            ExpandedCandidatesEmpty to candidatesEmpty
         )
     }
 
     val adapter: HorizontalCandidateViewAdapter by lazy {
-        object : HorizontalCandidateViewAdapter(theme) {
-            override fun onBindViewHolder(holder: CandidateViewHolder, position: Int) {
-                super.onBindViewHolder(holder, position)
-                holder.itemView.updateLayoutParams<FlexboxLayoutManager.LayoutParams> {
+        HorizontalCandidateViewAdapter(
+            theme,
+            onCandidateClick = { item ->
+                fcitx.launchOnReady { it.select(item.index) }
+            },
+            onCandidateLongClick = { item, view ->
+                inputView.showCandidateActionMenu(item.index, item.candidate.text, view)
+            },
+            onBindItem = { itemView ->
+                itemView.updateLayoutParams<FlexboxLayoutManager.LayoutParams> {
                     minWidth = layoutMinWidth
                     flexGrow = layoutFlexGrow
                     // Never squeeze a candidate below its natural width. The bar
                     // scrolls instead, so long candidates keep the same font size.
                     flexShrink = 0f
                 }
-                holder.itemView.setOnClickListener {
-                    fcitx.launchOnReady { it.select(holder.idx) }
-                }
-                holder.itemView.setOnLongClickListener {
-                    inputView.showCandidateActionMenu(holder.idx, holder.candidate.text, holder.ui.root)
-                    true
-                }
             }
-
-            override fun onViewRecycled(holder: CandidateViewHolder) {
-                holder.itemView.setOnClickListener(null)
-                holder.itemView.setOnLongClickListener(null)
-                super.onViewRecycled(holder)
-            }
-        }
+        )
     }
 
     val layoutManager: FlexboxLayoutManager by lazy {
@@ -151,27 +154,8 @@ class HorizontalCandidateComponent :
 
             override fun onLayoutCompleted(state: RecyclerView.State) {
                 super.onLayoutCompleted(state)
-                val cnt = this.childCount
-                if (secondLayoutPassNeeded) {
-                    if (cnt < adapter.candidates.size) {
-                        // [^2] RecyclerView can't display all candidates
-                        // update LayoutParams in onLayoutCompleted would trigger another
-                        // onLayoutCompleted, skip the second one to avoid infinite loop
-                        if (secondLayoutPassDone) return
-                        secondLayoutPassDone = true
-                        for (i in 0 until cnt) {
-                            getChildAt(i)!!.updateLayoutParams<LayoutParams> {
-                                flexGrow = 1f
-                            }
-                        }
-                    } else {
-                        secondLayoutPassNeeded = false
-                    }
-                }
                 refreshExpanded()
             }
-            // no need to override `generate{,Default}LayoutParams`, because HorizontalCandidateViewAdapter
-            // guarantees ViewHolder's layoutParams to be `FlexboxLayoutManager.LayoutParams`
         }
     }
 
@@ -207,66 +191,12 @@ class HorizontalCandidateComponent :
             // offsetting touch targets; horizontal scrolling is enabled here, so
             // disable it to keep candidate taps accurate.
             overScrollMode = View.OVER_SCROLL_NEVER
-            addOnScrollListener(object : RecyclerView.OnScrollListener() {
-                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                    if (dx > 0) shiftWindow(forward = true)
-                    else if (dx < 0) shiftWindow(forward = false)
-                }
-            })
         }
     }
 
-    private fun shiftWindow(forward: Boolean) {
-        if (windowLoading) return
-        val count = adapter.candidates.size
-        if (count == 0) return
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        val lastVisible = layoutManager.findLastVisibleItemPosition()
-        if (firstVisible < 0 || lastVisible < 0) return
-
-        if (forward) {
-            if (lastVisible < count - SHIFT_THRESHOLD) return
-            if (windowTotal >= 0 && windowStart + count >= windowTotal) return
-            // Shift so the current first visible candidate becomes position 0.
-            val shift = firstVisible.coerceAtLeast(1)
-            fetchWindow(windowStart + shift, anchorPosition = 0)
-        } else {
-            if (firstVisible > SHIFT_THRESHOLD) return
-            if (windowStart <= 0) return
-            val shift = min(WINDOW_SIZE / 2, windowStart)
-            fetchWindow(windowStart - shift, anchorPosition = firstVisible + shift)
-        }
-    }
-
-    private fun fetchWindow(newStart: Int, anchorPosition: Int) {
-        windowLoading = true
-        val generation = windowGeneration
-        service.lifecycleScope.launch {
-            val page = try {
-                fcitx.runOnReady { getCandidates(newStart, WINDOW_SIZE) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                windowLoading = false
-                return@launch
-            }
-            if (generation != windowGeneration) return@launch
-            if (page.isEmpty()) {
-                if (newStart > windowStart) {
-                    // Reached the end of the full candidate list.
-                    windowTotal = windowStart + adapter.candidates.size
-                }
-                windowLoading = false
-                return@launch
-            }
-            if (newStart > windowStart && page.size < WINDOW_SIZE) {
-                windowTotal = newStart + page.size
-            }
-            view.stopScroll()
-            windowStart = newStart
-            adapter.updateCandidates(page, adapter.total, newStart)
-            view.scrollToPosition(anchorPosition.coerceAtLeast(0))
-            windowLoading = false
+    override fun onScopeSetupFinished(scope: DynamicScope) {
+        submitJob = service.lifecycleScope.launch {
+            candidatesPager.flow.collectLatest { adapter.submitData(it) }
         }
     }
 
@@ -274,45 +204,35 @@ class HorizontalCandidateComponent :
         // Ignore redundant events; otherwise they would reset the scroll.
         if (data == lastCandidateData) return
         lastCandidateData = data
-        windowGeneration++
-        windowLoading = false
-        windowStart = 0
-        windowTotal = data.total
+        total = data.total
+        candidatesEmpty = data.candidates.isEmpty()
         val candidates = data.candidates
-        val total = data.total
         val maxSpanCount = maxSpanCountPref.getValue()
         when (fillStyle) {
             NeverFillWidth -> {
                 layoutMinWidth = 0
                 layoutFlexGrow = 0f
-                secondLayoutPassNeeded = false
             }
             AutoFillWidth -> {
                 layoutMinWidth = view.width / maxSpanCount - dividerDrawable.intrinsicWidth
                 layoutFlexGrow = if (candidates.size < maxSpanCount) 0f else 1f
-                // [^1] total candidates count < maxSpanCount
-                secondLayoutPassNeeded = candidates.size < maxSpanCount
-                secondLayoutPassDone = false
             }
             AlwaysFillWidth -> {
                 layoutMinWidth = 0
                 layoutFlexGrow = 1f
-                secondLayoutPassNeeded = false
             }
         }
-        adapter.updateCandidates(candidates, total, 0)
+        // Reload the paging source with the new candidate list. Paging keeps
+        // only a bounded window of pages and loads more as the bar scrolls.
+        adapter.refresh()
         // The expanded list always starts from the first candidate and must not
         // be affected by how far the horizontal bar has been scrolled.
         _expandedCandidatesRefresh.tryEmit(Unit)
         view.scrollToPosition(0)
-        // not sure why empty candidates won't trigger `FlexboxLayoutManager#onLayoutCompleted()`
-        if (candidates.isEmpty()) {
-            refreshExpanded()
-        }
+        refreshExpanded()
     }
 
     companion object {
         private const val WINDOW_SIZE = 10
-        private const val SHIFT_THRESHOLD = 2
     }
 }

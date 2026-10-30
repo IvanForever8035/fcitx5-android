@@ -1,16 +1,15 @@
 /*
  * SPDX-License-Identifier: LGPL-2.1-or-later
- * SPDX-FileCopyrightText: Copyright 2021-2024 Fcitx5 for Android Contributors
+ * SPDX-FileCopyrightText: Copyright 2021-2026 Fcitx5 for Android Contributors
  */
 
 package org.fcitx.fcitx5.android.input.candidates.horizontal
 
-import android.annotation.SuppressLint
+import android.view.View
 import android.view.ViewGroup
-import androidx.annotation.CallSuper
-import androidx.recyclerview.widget.RecyclerView
+import androidx.paging.PagingDataAdapter
+import androidx.recyclerview.widget.DiffUtil
 import com.google.android.flexbox.FlexboxLayoutManager
-import org.fcitx.fcitx5.android.core.CandidateWord
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.input.candidates.CandidateItemUi
 import org.fcitx.fcitx5.android.input.candidates.CandidateViewHolder
@@ -19,39 +18,27 @@ import splitties.views.dsl.core.matchParent
 import splitties.views.dsl.core.wrapContent
 import splitties.views.setPaddingDp
 
-open class HorizontalCandidateViewAdapter(val theme: Theme) :
-    RecyclerView.Adapter<CandidateViewHolder>() {
+class HorizontalCandidateViewAdapter(
+    private val theme: Theme,
+    private val onCandidateClick: (IndexedCandidate) -> Unit,
+    private val onCandidateLongClick: (IndexedCandidate, View) -> Unit,
+    private val onBindItem: (View) -> Unit
+) : PagingDataAdapter<IndexedCandidate, CandidateViewHolder>(diffCallback) {
 
-    init {
-        setHasStableIds(true)
+    companion object {
+        /**
+         * Always rebind: the global candidate index and the fill layout params
+         * must be applied again when a page is loaded or dropped.
+         */
+        private val diffCallback = object : DiffUtil.ItemCallback<IndexedCandidate>() {
+            override fun areItemsTheSame(oldItem: IndexedCandidate, newItem: IndexedCandidate) =
+                false
+
+            override fun areContentsTheSame(oldItem: IndexedCandidate, newItem: IndexedCandidate) =
+                false
+        }
     }
 
-    var candidates: Array<CandidateWord> = arrayOf()
-        private set
-
-    var total = -1
-        private set
-
-    /**
-     * Global index of [candidates][0]. Only a sliding window is kept in the
-     * adapter, so the native candidate index is `startIndex + position`.
-     */
-    var startIndex = 0
-        private set
-
-    @SuppressLint("NotifyDataSetChanged")
-    fun updateCandidates(data: Array<CandidateWord>, total: Int, startIndex: Int = 0) {
-        this.candidates = data
-        this.total = total
-        this.startIndex = startIndex
-        notifyDataSetChanged()
-    }
-
-    override fun getItemCount() = candidates.size
-
-    override fun getItemId(position: Int) = candidates.getOrNull(position).hashCode().toLong()
-
-    @CallSuper
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CandidateViewHolder {
         val ui = CandidateItemUi(parent.context, theme)
         ui.root.apply {
@@ -65,14 +52,21 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
         return CandidateViewHolder(ui)
     }
 
-    @CallSuper
     override fun onBindViewHolder(holder: CandidateViewHolder, position: Int) {
-        holder.update(startIndex + position, candidates[position])
+        val item = getItem(position) ?: return
+        holder.update(item.index, item.candidate)
+        holder.itemView.setOnClickListener { onCandidateClick(item) }
+        holder.itemView.setOnLongClickListener {
+            onCandidateLongClick(item, holder.ui.root)
+            true
+        }
+        onBindItem(holder.itemView)
     }
 
-    @CallSuper
     override fun onViewRecycled(holder: CandidateViewHolder) {
+        holder.itemView.setOnClickListener(null)
+        holder.itemView.setOnLongClickListener(null)
         holder.clear()
+        super.onViewRecycled(holder)
     }
-
 }

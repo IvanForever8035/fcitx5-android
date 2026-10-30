@@ -141,7 +141,7 @@ abstract class BaseExpandedCandidateWindow<T : BaseExpandedCandidateWindow<T>> :
             pagingSourceFactory = {
                 CandidatesPagingSource(
                     fcitx,
-                    total = horizontalCandidate.adapter.total,
+                    total = horizontalCandidate.total,
                     offset = adapter.offset
                 )
             }
@@ -193,7 +193,7 @@ abstract class BaseExpandedCandidateWindow<T : BaseExpandedCandidateWindow<T>> :
     override fun onDetached() {
         bar.expandButtonStateMachine.push(
             ExpandedCandidatesDetached,
-            ExpandedCandidatesEmpty to horizontalCandidate.adapter.candidates.isEmpty()
+            ExpandedCandidatesEmpty to horizontalCandidate.candidatesEmpty
         )
         candidatesSubmitJob?.cancel()
         refreshJob?.cancel()
