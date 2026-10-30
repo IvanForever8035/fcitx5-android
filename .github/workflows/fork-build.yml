@@ -32,19 +32,8 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-    branches:
-      - "**"
-    tags:
-      - "v*"
-    paths-ignore:
-      - "**.md"
-      - ".github/workflows/pull_request.yml"
-      - ".github/workflows/fdroid.yml"
-      - ".github/workflows/nix.yml"
-      - ".github/workflows/publish.yml"
 
-# A newer push to the same ref cancels the previous build.
+# A newer build on the same ref cancels the previous one.
 concurrency:
   group: fork-build-${{ github.ref }}
   cancel-in-progress: true
@@ -57,8 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      # github.event.inputs is present for workflow_dispatch and empty on push,
-      # so pushes default to debug / arm64-v8a and skip the plugin builds.
+      # Fallbacks for runs that do not provide inputs.
       VARIANT: ${{ github.event.inputs.variant || 'debug' }}
       ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
       BUILD_PLUGINS: ${{ github.event.inputs.build_plugins || 'false' }}
