@@ -87,6 +87,11 @@ class HorizontalCandidateComponent :
     // middle of a gesture forces a full Flexbox relayout and drops frames.
     private var pendingCandidates: Array<CandidateWord>? = null
 
+    // Some engines emit candidate events with identical contents (for example
+    // while selecting a candidate). Skip them so the bar is not scrolled back
+    // to the beginning for no reason.
+    private var lastCandidateData: FcitxEvent.CandidateListEvent.Data? = null
+
     // Tells the expanded candidate window to reload from the first candidate.
     // Replay the last value so a newly opened window gets it as well.
     private val _expandedCandidatesRefresh = MutableSharedFlow<Unit>(
@@ -250,7 +255,7 @@ class HorizontalCandidateComponent :
                 loadExhausted = true
             }
             if (view.scrollState == RecyclerView.SCROLL_STATE_IDLE) {
-                adapter.appendCandidates(more)
+                appendCandidatesPreservingScroll(more)
                 if (!loadExhausted && !view.canScrollHorizontally(1)) {
                     // Wide screen: the appended page still doesn't overflow the bar.
                     loadMoreJob = null
@@ -264,10 +269,26 @@ class HorizontalCandidateComponent :
         }
     }
 
+    private fun appendCandidatesPreservingScroll(data: Array<CandidateWord>) {
+        val firstVisible = layoutManager.findFirstVisibleItemPosition()
+        val generation = candidateGeneration
+        adapter.appendCandidates(data)
+        if (firstVisible > 0) {
+            // notifyItemRangeInserted can make FlexboxLayoutManager drop its
+            // anchor and jump back to item 0. Keep the candidate the user was
+            // looking at; skip it if the candidate list changed meanwhile.
+            view.post {
+                if (generation == candidateGeneration) {
+                    layoutManager.scrollToPosition(firstVisible)
+                }
+            }
+        }
+    }
+
     private fun appendPendingCandidates() {
         val pending = pendingCandidates ?: return
         pendingCandidates = null
-        adapter.appendCandidates(pending)
+        appendCandidatesPreservingScroll(pending)
         if (!loadExhausted && !view.canScrollHorizontally(1)) {
             // Still not scrollable, e.g. on a very wide screen.
             loadMoreJob = null
@@ -276,6 +297,9 @@ class HorizontalCandidateComponent :
     }
 
     override fun onCandidateUpdate(data: FcitxEvent.CandidateListEvent.Data) {
+        // Ignore redundant events; otherwise they would reset the scroll.
+        if (data == lastCandidateData) return
+        lastCandidateData = data
         candidateGeneration++
         loadMoreJob?.cancel()
         loadMoreJob = null
