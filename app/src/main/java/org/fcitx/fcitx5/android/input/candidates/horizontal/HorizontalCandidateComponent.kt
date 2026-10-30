@@ -9,14 +9,12 @@ import android.content.res.Configuration
 import android.graphics.drawable.ShapeDrawable
 import android.graphics.drawable.shapes.RectShape
 import android.view.View
-import androidx.core.view.updateLayoutParams
+import android.view.ViewGroup
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.flexbox.FlexDirection
-import com.google.android.flexbox.FlexWrap
-import com.google.android.flexbox.FlexboxLayoutManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -31,7 +29,6 @@ import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.BooleanKey.Ex
 import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.TransitionEvent.ExpandedCandidatesUpdated
 import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
 import org.fcitx.fcitx5.android.input.broadcast.InputBroadcastReceiver
-import org.fcitx.fcitx5.android.input.candidates.expanded.decoration.FlexboxVerticalDecoration
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode.AlwaysFillWidth
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode.AutoFillWidth
 import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateMode.NeverFillWidth
@@ -67,7 +64,6 @@ class HorizontalCandidateComponent :
     }
 
     private var layoutMinWidth = 0
-    private var layoutFlexGrow = 1f
 
     /** Full candidate count from the latest engine event (-1 if unknown). */
     @Volatile
@@ -128,30 +124,32 @@ class HorizontalCandidateComponent :
                 inputView.showCandidateActionMenu(item.index, item.candidate.text, view)
             },
             onBindItem = { itemView ->
-                itemView.updateLayoutParams<FlexboxLayoutManager.LayoutParams> {
-                    minWidth = layoutMinWidth
-                    flexGrow = layoutFlexGrow
-                    // Never squeeze a candidate below its natural width. The bar
-                    // scrolls instead, so long candidates keep the same font size.
-                    flexShrink = 0f
+                val lp = itemView.layoutParams as? RecyclerView.LayoutParams
+                    ?: RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                lp.width = when (fillStyle) {
+                    NeverFillWidth -> ViewGroup.LayoutParams.WRAP_CONTENT
+                    AutoFillWidth -> {
+                        val w = if (layoutMinWidth > 0) layoutMinWidth
+                        else view.width / maxSpanCountPref.getValue() - dividerDrawable.intrinsicWidth
+                        if (w > 0) w else ViewGroup.LayoutParams.WRAP_CONTENT
+                    }
+                    AlwaysFillWidth -> {
+                        val count = adapter.itemCount
+                        if (count in 1 until maxSpanCountPref.getValue()) view.width / count
+                        else ViewGroup.LayoutParams.WRAP_CONTENT
+                    }
                 }
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+                itemView.layoutParams = lp
             }
         )
     }
 
-    val layoutManager: FlexboxLayoutManager by lazy {
-        object : FlexboxLayoutManager(context) {
-            init {
-                // Lay everything out in one horizontal row. The bar's height is
-                // fixed, so the default WRAP would put the overflow on invisible
-                // lines that can never be reached.
-                flexDirection = FlexDirection.ROW
-                flexWrap = FlexWrap.NOWRAP
-            }
-
-            override fun canScrollVertically() = false
-            override fun canScrollHorizontally() = true
-
+    val layoutManager: LinearLayoutManager by lazy {
+        object : LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false) {
             override fun onLayoutCompleted(state: RecyclerView.State) {
                 super.onLayoutCompleted(state)
                 refreshExpanded()
@@ -182,7 +180,6 @@ class HorizontalCandidateComponent :
             itemAnimator = null
             adapter = this@HorizontalCandidateComponent.adapter
             layoutManager = this@HorizontalCandidateComponent.layoutManager
-            addItemDecoration(FlexboxVerticalDecoration(dividerDrawable))
             // The bar's size is fixed by its constraints, not by its contents.
             setHasFixedSize(true)
             // Keep more item views around to avoid re-inflating while swiping.
@@ -206,21 +203,12 @@ class HorizontalCandidateComponent :
         lastCandidateData = data
         total = data.total
         candidatesEmpty = data.candidates.isEmpty()
-        val candidates = data.candidates
         val maxSpanCount = maxSpanCountPref.getValue()
         when (fillStyle) {
-            NeverFillWidth -> {
-                layoutMinWidth = 0
-                layoutFlexGrow = 0f
-            }
-            AutoFillWidth -> {
+            NeverFillWidth -> layoutMinWidth = 0
+            AutoFillWidth ->
                 layoutMinWidth = view.width / maxSpanCount - dividerDrawable.intrinsicWidth
-                layoutFlexGrow = if (candidates.size < maxSpanCount) 0f else 1f
-            }
-            AlwaysFillWidth -> {
-                layoutMinWidth = 0
-                layoutFlexGrow = 1f
-            }
+            AlwaysFillWidth -> layoutMinWidth = 0
         }
         // Reload the paging source with the new candidate list. Paging keeps
         // only a bounded window of pages and loads more as the bar scrolls.

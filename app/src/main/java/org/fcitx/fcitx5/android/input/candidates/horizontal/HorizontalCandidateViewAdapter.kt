@@ -9,7 +9,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.DiffUtil
-import com.google.android.flexbox.FlexboxLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import org.fcitx.fcitx5.android.data.theme.Theme
 import org.fcitx.fcitx5.android.input.candidates.CandidateItemUi
 import org.fcitx.fcitx5.android.input.candidates.CandidateViewHolder
@@ -44,10 +44,7 @@ class HorizontalCandidateViewAdapter(
         ui.root.apply {
             minimumWidth = dp(40)
             setPaddingDp(10, 0, 10, 0)
-            layoutParams = FlexboxLayoutManager.LayoutParams(wrapContent, matchParent).apply {
-                // Candidate items size to their content; overflow is scrolled.
-                flexShrink = 0f
-            }
+            layoutParams = RecyclerView.LayoutParams(wrapContent, matchParent)
         }
         return CandidateViewHolder(ui)
     }
