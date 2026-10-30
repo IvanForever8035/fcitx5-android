@@ -32,21 +32,19 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
     var total = -1
         private set
 
+    /**
+     * Global index of [candidates][0]. Only a sliding window is kept in the
+     * adapter, so the native candidate index is `startIndex + position`.
+     */
+    var startIndex = 0
+        private set
+
     @SuppressLint("NotifyDataSetChanged")
-    fun updateCandidates(data: Array<CandidateWord>, total: Int) {
+    fun updateCandidates(data: Array<CandidateWord>, total: Int, startIndex: Int = 0) {
         this.candidates = data
         this.total = total
+        this.startIndex = startIndex
         notifyDataSetChanged()
-    }
-
-    /**
-     * Append a page of candidates fetched on demand, past the initial bulk page.
-     */
-    fun appendCandidates(data: Array<CandidateWord>) {
-        if (data.isEmpty()) return
-        val start = candidates.size
-        candidates = candidates + data
-        notifyItemRangeInserted(start, data.size)
     }
 
     override fun getItemCount() = candidates.size
@@ -69,7 +67,7 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
 
     @CallSuper
     override fun onBindViewHolder(holder: CandidateViewHolder, position: Int) {
-        holder.update(position, candidates[position])
+        holder.update(startIndex + position, candidates[position])
     }
 
     @CallSuper

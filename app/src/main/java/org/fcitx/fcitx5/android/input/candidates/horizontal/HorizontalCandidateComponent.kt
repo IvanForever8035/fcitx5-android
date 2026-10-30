@@ -16,13 +16,11 @@ import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
-import org.fcitx.fcitx5.android.core.CandidateWord
 import org.fcitx.fcitx5.android.core.FcitxEvent
 import org.fcitx.fcitx5.android.daemon.launchOnReady
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
@@ -43,8 +41,8 @@ import org.fcitx.fcitx5.android.input.dependency.inputView
 import org.fcitx.fcitx5.android.input.dependency.theme
 import org.mechdancer.dependency.manager.must
 import splitties.dimensions.dp
-import timber.log.Timber
 import kotlin.math.max
+import kotlin.math.min
 
 class HorizontalCandidateComponent :
     UniqueViewComponent<HorizontalCandidateComponent, RecyclerView>(), InputBroadcastReceiver {
@@ -78,14 +76,13 @@ class HorizontalCandidateComponent :
     private var secondLayoutPassNeeded = false
     private var secondLayoutPassDone = false
 
-    // The native bulk candidate list only delivers the first 16 candidates.
-    // Load the rest on demand as the user scrolls the bar.
-    private var loadMoreJob: Job? = null
-    private var candidateGeneration = 0
-    private var loadExhausted = false
-    // Loaded page waiting for the scroll to settle. Inserting items in the
-    // middle of a gesture forces a full Flexbox relayout and drops frames.
-    private var pendingCandidates: Array<CandidateWord>? = null
+    // Sliding window: only WINDOW_SIZE candidates are kept in the adapter at a
+    // time. Scrolling towards an edge shifts the window and loads the next
+    // slice instead of appending to an ever-growing list.
+    private var windowStart = 0
+    private var windowTotal = -1
+    private var windowLoading = false
+    private var windowGeneration = 0
 
     // Some engines emit candidate events with identical contents (for example
     // while selecting a candidate). Skip them so the bar is not scrolled back
@@ -152,19 +149,6 @@ class HorizontalCandidateComponent :
             override fun canScrollVertically() = false
             override fun canScrollHorizontally() = true
 
-            override fun onItemsAdded(recyclerView: RecyclerView, positionStart: Int, itemCount: Int) {
-                super.onItemsAdded(recyclerView, positionStart, itemCount)
-                // Flexbox's own handler only restores the anchor when the
-                // insertion is before the last visible item. On-demand pages
-                // are appended at the end, so set the pending position here;
-                // otherwise the next layout starts from item 0.
-                val firstVisible = findFirstVisibleItemPosition()
-                Timber.i("CandBar onItemsAdded start=$positionStart count=$itemCount first=$firstVisible")
-                if (firstVisible > 0) {
-                    scrollToPosition(firstVisible)
-                }
-            }
-
             override fun onLayoutCompleted(state: RecyclerView.State) {
                 super.onLayoutCompleted(state)
                 val cnt = this.childCount
@@ -225,132 +209,77 @@ class HorizontalCandidateComponent :
             overScrollMode = View.OVER_SCROLL_NEVER
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                    if (dx > 0) maybeLoadMore()
-                }
-
-                override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
-                    Timber.i(
-                        "CandBar state=$newState" +
-                            " first=${this@HorizontalCandidateComponent.layoutManager.findFirstVisibleItemPosition()}" +
-                            " count=${this@HorizontalCandidateComponent.adapter.candidates.size}"
-                    )
-                    if (newState == RecyclerView.SCROLL_STATE_IDLE) {
-                        recyclerView.post { appendPendingCandidates() }
-                    }
+                    if (dx > 0) shiftWindow(forward = true)
+                    else if (dx < 0) shiftWindow(forward = false)
                 }
             })
         }
     }
 
-    private fun maybeLoadMore() {
-        // A fetched page that is waiting for the scroll to settle already
-        // covers the next offset; don't fetch it twice.
-        if (pendingCandidates != null || loadMoreJob?.isActive == true || loadExhausted) return
-        val loaded = adapter.candidates.size
-        if (loaded == 0) return
-        val total = adapter.total
-        if (total >= 0 && loaded >= total) return
+    private fun shiftWindow(forward: Boolean) {
+        if (windowLoading) return
+        val count = adapter.candidates.size
+        if (count == 0) return
+        val firstVisible = layoutManager.findFirstVisibleItemPosition()
         val lastVisible = layoutManager.findLastVisibleItemPosition()
-        if (lastVisible < 0 || lastVisible < loaded - LOAD_MORE_THRESHOLD) return
+        if (firstVisible < 0 || lastVisible < 0) return
 
-        val generation = candidateGeneration
-        val offset = loaded
-        Timber.i("CandBar loadMore offset=$offset state=${view.scrollState}")
-        loadMoreJob = service.lifecycleScope.launch {
-            val more = try {
-                fcitx.runOnReady { getCandidates(offset, LOAD_MORE_BATCH_SIZE) }
+        if (forward) {
+            if (lastVisible < count - SHIFT_THRESHOLD) return
+            if (windowTotal >= 0 && windowStart + count >= windowTotal) return
+            // Shift so the current first visible candidate becomes position 0.
+            val shift = firstVisible.coerceAtLeast(1)
+            fetchWindow(windowStart + shift, anchorPosition = 0)
+        } else {
+            if (firstVisible > SHIFT_THRESHOLD) return
+            if (windowStart <= 0) return
+            val shift = min(WINDOW_SIZE / 2, windowStart)
+            fetchWindow(windowStart - shift, anchorPosition = firstVisible + shift)
+        }
+    }
+
+    private fun fetchWindow(newStart: Int, anchorPosition: Int) {
+        windowLoading = true
+        val generation = windowGeneration
+        service.lifecycleScope.launch {
+            val page = try {
+                fcitx.runOnReady { getCandidates(newStart, WINDOW_SIZE) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Timber.w(e, "Failed to load more candidates (offset=$offset)")
+                windowLoading = false
                 return@launch
             }
-            // Candidate list changed while we were loading, drop the result.
-            if (generation != candidateGeneration) {
-                Timber.i("CandBar loadMore dropped offset=$offset got=${more.size}")
-                return@launch
-            }
-            Timber.i("CandBar loadMore offset=$offset got=${more.size} state=${view.scrollState}")
-            if (more.isEmpty()) {
-                loadExhausted = true
-                return@launch
-            }
-            if (more.size < LOAD_MORE_BATCH_SIZE) {
-                loadExhausted = true
-            }
-            if (view.scrollState == RecyclerView.SCROLL_STATE_IDLE) {
-                appendCandidatesPreservingScroll(more)
-                if (!loadExhausted && !view.canScrollHorizontally(1)) {
-                    // Wide screen: the appended page still doesn't overflow the bar.
-                    loadMoreJob = null
-                    view.post { maybeLoadMore() }
+            if (generation != windowGeneration) return@launch
+            if (page.isEmpty()) {
+                if (newStart > windowStart) {
+                    // Reached the end of the full candidate list.
+                    windowTotal = windowStart + adapter.candidates.size
                 }
-            } else {
-                // Do not insert while the user is dragging/flinging: the full
-                // Flexbox relayout would drop frames in the middle of a gesture.
-                pendingCandidates = more
+                windowLoading = false
+                return@launch
             }
-        }
-    }
-
-    private fun appendCandidatesPreservingScroll(data: Array<CandidateWord>) {
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        val generation = candidateGeneration
-        Timber.i(
-            "CandBar append start first=$firstVisible loaded=${adapter.candidates.size}" +
-                " add=${data.size} state=${view.scrollState}"
-        )
-        adapter.appendCandidates(data)
-        if (firstVisible > 0) {
-            // notifyItemRangeInserted can make FlexboxLayoutManager drop its
-            // anchor and jump back to item 0. Keep the candidate the user was
-            // looking at; skip it if the candidate list changed meanwhile.
-            view.post {
-                if (generation == candidateGeneration) {
-                    Timber.i(
-                        "CandBar append restore target=$firstVisible" +
-                            " now=${layoutManager.findFirstVisibleItemPosition()}" +
-                            " count=${adapter.candidates.size}"
-                    )
-                    layoutManager.scrollToPosition(firstVisible)
-                } else {
-                    Timber.i("CandBar append restore skipped (generation changed)")
-                }
+            if (newStart > windowStart && page.size < WINDOW_SIZE) {
+                windowTotal = newStart + page.size
             }
-        }
-    }
-
-    private fun appendPendingCandidates() {
-        val pending = pendingCandidates ?: return
-        pendingCandidates = null
-        Timber.i("CandBar appendPending size=${pending.size}")
-        appendCandidatesPreservingScroll(pending)
-        if (!loadExhausted && !view.canScrollHorizontally(1)) {
-            // Still not scrollable, e.g. on a very wide screen.
-            loadMoreJob = null
-            view.post { maybeLoadMore() }
+            view.stopScroll()
+            windowStart = newStart
+            adapter.updateCandidates(page, adapter.total, newStart)
+            view.scrollToPosition(anchorPosition.coerceAtLeast(0))
+            windowLoading = false
         }
     }
 
     override fun onCandidateUpdate(data: FcitxEvent.CandidateListEvent.Data) {
         // Ignore redundant events; otherwise they would reset the scroll.
-        if (data == lastCandidateData) {
-            Timber.i("CandBar update duplicate skipped")
-            return
-        }
+        if (data == lastCandidateData) return
         lastCandidateData = data
-        candidateGeneration++
-        loadMoreJob?.cancel()
-        loadMoreJob = null
-        loadExhausted = false
-        pendingCandidates = null
+        windowGeneration++
+        windowLoading = false
+        windowStart = 0
+        windowTotal = data.total
         val candidates = data.candidates
         val total = data.total
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        Timber.i(
-            "CandBar update old=${adapter.candidates.size} new=${candidates.size}" +
-                " total=$total first=$firstVisible"
-        )
         val maxSpanCount = maxSpanCountPref.getValue()
         when (fillStyle) {
             NeverFillWidth -> {
@@ -371,27 +300,19 @@ class HorizontalCandidateComponent :
                 secondLayoutPassNeeded = false
             }
         }
-        adapter.updateCandidates(candidates, total)
-        Timber.i(
-            "CandBar update done first=${layoutManager.findFirstVisibleItemPosition()}" +
-                " count=${adapter.candidates.size}"
-        )
+        adapter.updateCandidates(candidates, total, 0)
         // The expanded list always starts from the first candidate and must not
         // be affected by how far the horizontal bar has been scrolled.
         _expandedCandidatesRefresh.tryEmit(Unit)
         view.scrollToPosition(0)
-        Timber.i("CandBar reset to 0")
         // not sure why empty candidates won't trigger `FlexboxLayoutManager#onLayoutCompleted()`
         if (candidates.isEmpty()) {
             refreshExpanded()
-        } else {
-            // On wide screens the first batch may not overflow the bar at all.
-            view.post { maybeLoadMore() }
         }
     }
 
     companion object {
-        private const val LOAD_MORE_THRESHOLD = 4
-        private const val LOAD_MORE_BATCH_SIZE = 32
+        private const val WINDOW_SIZE = 10
+        private const val SHIFT_THRESHOLD = 2
     }
 }
