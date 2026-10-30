@@ -40,8 +40,7 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
     }
 
     /**
-     * Append a page of candidates fetched on demand, so the horizontal bar can
-     * scroll past the initial batch (native bulk mode sends at most 16).
+     * Append a page of candidates fetched on demand, past the initial bulk page.
      */
     fun appendCandidates(data: Array<CandidateWord>) {
         if (data.isEmpty()) return
