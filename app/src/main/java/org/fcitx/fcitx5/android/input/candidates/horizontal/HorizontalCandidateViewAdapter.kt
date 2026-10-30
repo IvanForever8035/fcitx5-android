@@ -19,8 +19,10 @@ import splitties.views.dsl.core.matchParent
 import splitties.views.dsl.core.wrapContent
 import splitties.views.setPaddingDp
 
-open class HorizontalCandidateViewAdapter(val theme: Theme) :
-    RecyclerView.Adapter<CandidateViewHolder>() {
+open class HorizontalCandidateViewAdapter(
+    val theme: Theme,
+    var textSizeSp: Float = CandidateItemUi.DEFAULT_TEXT_SIZE
+) : RecyclerView.Adapter<CandidateViewHolder>() {
 
     init {
         setHasStableIds(true)
@@ -56,7 +58,7 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
 
     @CallSuper
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CandidateViewHolder {
-        val ui = CandidateItemUi(parent.context, theme)
+        val ui = CandidateItemUi(parent.context, theme, textSizeSp)
         ui.root.apply {
             minimumWidth = dp(40)
             setPaddingDp(10, 0, 10, 0)
@@ -70,6 +72,7 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
 
     @CallSuper
     override fun onBindViewHolder(holder: CandidateViewHolder, position: Int) {
+        holder.ui.setTextSize(textSizeSp)
         holder.update(position, candidates[position])
     }
 
