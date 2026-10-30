@@ -39,17 +39,6 @@ open class HorizontalCandidateViewAdapter(val theme: Theme) :
         notifyDataSetChanged()
     }
 
-    /**
-     * Append a page of candidates fetched on demand, so the horizontal bar can
-     * scroll past the initial batch (native bulk mode sends at most 16).
-     */
-    fun appendCandidates(data: Array<CandidateWord>) {
-        if (data.isEmpty()) return
-        val start = candidates.size
-        candidates = candidates + data
-        notifyItemRangeInserted(start, data.size)
-    }
-
     override fun getItemCount() = candidates.size
 
     override fun getItemId(position: Int) = candidates.getOrNull(position).hashCode().toLong()

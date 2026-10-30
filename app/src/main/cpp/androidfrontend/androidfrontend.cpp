@@ -99,8 +99,9 @@ public:
             const auto &bulk = list->toBulk();
             if (bulk) {
                 total = bulk->totalSize();
-                // limit candidate count to 16 (for paging)
-                const int limit = total < 0 ? 16 : std::min(total, 16);
+                // Send a page large enough that the horizontal bar does not
+                // have to append candidates while the user is scrolling.
+                const int limit = total < 0 ? 64 : std::min(total, 64);
                 for (int i = 0; i < limit; i++) {
                     try {
                         // maybe unnecessary; I don't see anywhere using `CandidateWord::setPlaceHolder`
