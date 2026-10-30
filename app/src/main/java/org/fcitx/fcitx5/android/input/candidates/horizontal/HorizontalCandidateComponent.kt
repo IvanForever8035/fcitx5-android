@@ -151,6 +151,19 @@ class HorizontalCandidateComponent :
 
             override fun canScrollVertically() = false
             override fun canScrollHorizontally() = true
+
+            override fun onItemsAdded(recyclerView: RecyclerView, positionStart: Int, itemCount: Int) {
+                super.onItemsAdded(recyclerView, positionStart, itemCount)
+                // Flexbox's own handler only restores the anchor when the
+                // insertion is before the last visible item. On-demand pages
+                // are appended at the end, so set the pending position here;
+                // otherwise the next layout starts from item 0.
+                val firstVisible = findFirstVisibleItemPosition()
+                if (firstVisible > 0) {
+                    scrollToPosition(firstVisible)
+                }
+            }
+
             override fun onLayoutCompleted(state: RecyclerView.State) {
                 super.onLayoutCompleted(state)
                 val cnt = this.childCount
