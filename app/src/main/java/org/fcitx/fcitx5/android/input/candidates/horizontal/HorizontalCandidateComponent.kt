@@ -230,8 +230,9 @@ class HorizontalCandidateComponent :
 
                 override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                     Timber.d(
-                        "CandBar state=$newState first=${layoutManager.findFirstVisibleItemPosition()}" +
-                            " count=${adapter.candidates.size}"
+                        "CandBar state=$newState" +
+                            " first=${this@HorizontalCandidateComponent.layoutManager.findFirstVisibleItemPosition()}" +
+                            " count=${this@HorizontalCandidateComponent.adapter.candidates.size}"
                     )
                     if (newState == RecyclerView.SCROLL_STATE_IDLE) {
                         recyclerView.post { appendPendingCandidates() }
