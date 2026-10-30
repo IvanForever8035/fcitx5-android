@@ -272,17 +272,11 @@ class HorizontalCandidateComponent :
     private fun appendCandidatesPreservingScroll(data: Array<CandidateWord>) {
         val firstVisible = layoutManager.findFirstVisibleItemPosition()
         val generation = candidateGeneration
-        if (firstVisible > 0) {
-            // FlexboxLayoutManager has no built-in scroll anchoring and lays
-            // out from item 0 after an adapter change. Set the pending
-            // position *before* inserting so the new layout starts from the
-            // candidate the user is looking at.
-            layoutManager.scrollToPosition(firstVisible)
-        }
         adapter.appendCandidates(data)
         if (firstVisible > 0) {
-            // Belt and suspenders: restore once more after the layout pass,
-            // unless the candidate list changed in the meantime.
+            // notifyItemRangeInserted can make FlexboxLayoutManager drop its
+            // anchor and jump back to item 0. Keep the candidate the user was
+            // looking at; skip it if the candidate list changed meanwhile.
             view.post {
                 if (generation == candidateGeneration) {
                     layoutManager.scrollToPosition(firstVisible)
@@ -307,21 +301,12 @@ class HorizontalCandidateComponent :
         if (data == lastCandidateData) return
         lastCandidateData = data
         candidateGeneration++
-        val generation = candidateGeneration
-        val candidates = data.candidates
-        val total = data.total
-        val oldCandidates = adapter.candidates
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        // Loading more candidates can make the engine emit a list that simply
-        // extends the previous one. In that case keep the user's position
-        // instead of jumping back to the first candidate.
-        val keepPosition = firstVisible > 0 && oldCandidates.isNotEmpty() &&
-            candidates.size >= oldCandidates.size &&
-            candidates.copyOfRange(0, oldCandidates.size).contentEquals(oldCandidates)
         loadMoreJob?.cancel()
         loadMoreJob = null
         loadExhausted = false
         pendingCandidates = null
+        val candidates = data.candidates
+        val total = data.total
         val maxSpanCount = maxSpanCountPref.getValue()
         when (fillStyle) {
             NeverFillWidth -> {
@@ -342,24 +327,11 @@ class HorizontalCandidateComponent :
                 secondLayoutPassNeeded = false
             }
         }
-        if (keepPosition) {
-            // Set the anchor before the adapter change so Flexbox lays out
-            // from the current candidate instead of item 0.
-            layoutManager.scrollToPosition(firstVisible)
-        }
         adapter.updateCandidates(candidates, total)
         // The expanded list always starts from the first candidate and must not
         // be affected by how far the horizontal bar has been scrolled.
         _expandedCandidatesRefresh.tryEmit(Unit)
-        if (keepPosition) {
-            view.post {
-                if (generation == candidateGeneration) {
-                    layoutManager.scrollToPosition(firstVisible)
-                }
-            }
-        } else {
-            view.scrollToPosition(0)
-        }
+        view.scrollToPosition(0)
         // not sure why empty candidates won't trigger `FlexboxLayoutManager#onLayoutCompleted()`
         if (candidates.isEmpty()) {
             refreshExpanded()
