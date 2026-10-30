@@ -99,9 +99,9 @@ public:
             const auto &bulk = list->toBulk();
             if (bulk) {
                 total = bulk->totalSize();
-                // Start with a larger page so the bar rarely needs to append
-                // while scrolling; on-demand paging continues past it.
-                const int limit = total < 0 ? 64 : std::min(total, 64);
+                // Small first page for A/B testing the dynamic loading path;
+                // further candidates are fetched on demand.
+                const int limit = total < 0 ? 10 : std::min(total, 10);
                 for (int i = 0; i < limit; i++) {
                     try {
                         // maybe unnecessary; I don't see anywhere using `CandidateWord::setPlaceHolder`
