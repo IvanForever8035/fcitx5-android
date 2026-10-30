@@ -95,9 +95,9 @@ class HorizontalCandidateComponent :
             config = PagingConfig(
                 pageSize = WINDOW_SIZE,
                 initialLoadSize = WINDOW_SIZE,
-                // Keep only a small window of pages in memory; Paging loads the
-                // pages the user is about to see and drops the far ones.
-                maxSize = WINDOW_SIZE * 2,
+                // Keep already loaded pages. The engine's total is unknown
+                // (-1), so placeholders cannot be used to drop and reload the
+                // earlier pages; dropping them would make scrolling back fail.
                 enablePlaceholders = false,
                 prefetchDistance = WINDOW_SIZE / 2
             ),
