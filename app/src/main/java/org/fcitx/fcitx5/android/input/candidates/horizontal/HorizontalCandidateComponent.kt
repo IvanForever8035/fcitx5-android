@@ -129,19 +129,22 @@ class HorizontalCandidateComponent :
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                lp.width = when (fillStyle) {
-                    NeverFillWidth -> ViewGroup.LayoutParams.WRAP_CONTENT
+                // Keep a minimum width but let the item grow to its content so
+                // AutoScaleTextView does not shrink long candidates.
+                val minWidth = when (fillStyle) {
+                    NeverFillWidth -> 0
                     AutoFillWidth -> {
-                        val w = if (layoutMinWidth > 0) layoutMinWidth
+                        if (layoutMinWidth > 0) layoutMinWidth
                         else view.width / maxSpanCountPref.getValue() - dividerDrawable.intrinsicWidth
-                        if (w > 0) w else ViewGroup.LayoutParams.WRAP_CONTENT
                     }
                     AlwaysFillWidth -> {
                         val count = adapter.itemCount
                         if (count in 1 until maxSpanCountPref.getValue()) view.width / count
-                        else ViewGroup.LayoutParams.WRAP_CONTENT
+                        else 0
                     }
                 }
+                itemView.minimumWidth = max(minWidth, context.dp(40))
+                lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
                 lp.height = ViewGroup.LayoutParams.MATCH_PARENT
                 itemView.layoutParams = lp
             }
