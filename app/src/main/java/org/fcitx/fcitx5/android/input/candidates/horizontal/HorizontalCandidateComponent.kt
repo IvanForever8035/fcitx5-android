@@ -57,7 +57,6 @@ class HorizontalCandidateComponent :
     private val bar: KawaiiBarComponent by manager.must()
 
     private val fillStyle by AppPrefs.getInstance().keyboard.horizontalCandidateStyle
-    private val fontSize by AppPrefs.getInstance().keyboard.horizontalCandidateFontSize
     private val maxSpanCountPref by lazy {
         AppPrefs.getInstance().keyboard.run {
             if (context.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT)
@@ -108,7 +107,7 @@ class HorizontalCandidateComponent :
     }
 
     val adapter: HorizontalCandidateViewAdapter by lazy {
-        object : HorizontalCandidateViewAdapter(theme, fontSize.toFloat()) {
+        object : HorizontalCandidateViewAdapter(theme) {
             override fun onBindViewHolder(holder: CandidateViewHolder, position: Int) {
                 super.onBindViewHolder(holder, position)
                 holder.itemView.updateLayoutParams<FlexboxLayoutManager.LayoutParams> {
@@ -282,8 +281,6 @@ class HorizontalCandidateComponent :
         loadMoreJob = null
         loadExhausted = false
         pendingCandidates = null
-        // Pick up font-size changes on the next candidate update.
-        adapter.textSizeSp = fontSize.toFloat()
         val candidates = data.candidates
         val total = data.total
         val maxSpanCount = maxSpanCountPref.getValue()

@@ -250,14 +250,6 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
             "horizontal_candidate_style",
             HorizontalCandidateMode.AutoFillWidth
         )
-        val horizontalCandidateFontSize = int(
-            R.string.horizontal_candidate_font_size,
-            "horizontal_candidate_font_size",
-            20,
-            12,
-            24,
-            "sp"
-        )
         val expandedCandidateStyle = enumList(
             R.string.expanded_candidate_style,
             "expanded_candidate_style",

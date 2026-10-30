@@ -204,7 +204,6 @@
     <string name="space_behavior_picker">顯示選擇輸入法對話框</string>
     <string name="show_lang_switch_key">顯示語言切換鍵</string>
     <string name="horizontal_candidate_style">橫向候選詞樣式</string>
-    <string name="horizontal_candidate_font_size">候選欄字體大小</string>
     <string name="horizontal_candidate_never_fill">從不填充寬度</string>
     <string name="horizontal_candidate_auto_fill">按需填充寬度</string>
     <string name="horizontal_candidate_always_fill">總是填充寬度</string>

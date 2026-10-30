@@ -6,7 +6,6 @@
 package org.fcitx.fcitx5.android.input.candidates
 
 import android.content.Context
-import android.util.TypedValue
 import androidx.core.text.buildSpannedString
 import androidx.core.text.color
 import org.fcitx.fcitx5.android.core.CandidateWord
@@ -22,28 +21,14 @@ import splitties.views.dsl.core.view
 import splitties.views.dsl.core.wrapContent
 import splitties.views.gravityCenter
 
-class CandidateItemUi(
-    override val ctx: Context,
-    val theme: Theme,
-    textSizeSp: Float = DEFAULT_TEXT_SIZE
-) : Ui {
+class CandidateItemUi(override val ctx: Context, val theme: Theme) : Ui {
 
     private val text = view(::AutoScaleTextView) {
         scaleMode = AutoScaleTextView.Mode.Proportional
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+        textSize = 20f // sp
         isSingleLine = true
         gravity = gravityCenter
         setTextColor(theme.candidateTextColor)
-    }
-
-    fun setTextSize(sizeSp: Float) {
-        val px = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, sizeSp, ctx.resources.displayMetrics
-        )
-        // Avoid a relayout on every bind when the size did not change.
-        if (text.textSize != px) {
-            text.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-        }
     }
 
     override val root = view(::CustomGestureView) {
@@ -75,9 +60,5 @@ class CandidateItemUi(
                 }
             }
         }
-    }
-
-    companion object {
-        const val DEFAULT_TEXT_SIZE = 20f
     }
 }
